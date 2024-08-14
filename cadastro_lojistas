@@ -1,0 +1,63 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, count, avg, sum
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.regression import LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
+
+# Criando uma sessão Spark
+spark = SparkSession.builder \
+    .appName("Análise Avançada de Cadastro de Clientes Lojistas com PySpark") \
+    .getOrCreate()
+
+# Lendo um arquivo CSV com os dados de cadastro de clientes
+# Suponha que o arquivo CSV tenha as colunas: 'cliente_id', 'nome', 'regiao', 'categoria', 'vendas_ano_anterior', 'vendas_ano_atual'
+df_clientes = spark.read.csv("caminho/para/seu_arquivo_de_clientes.csv", header=True, inferSchema=True)
+
+# Visualizando as primeiras linhas do DataFrame
+df_clientes.show(5)
+
+# 1. Segmentação de Clientes: Agrupando clientes por volume de vendas do ano anterior
+# Definindo segmentos: Pequeno (< 1000), Médio (1000-5000), Grande (> 5000)
+df_clientes_segmentado = df_clientes.withColumn(
+    "segmento",
+    col("vendas_ano_anterior").cast("int").when(col("vendas_ano_anterior") < 1000, "Pequeno")
+    .when(col("vendas_ano_anterior").between(1000, 5000), "Médio")
+    .otherwise("Grande")
+)
+
+# Exibindo a segmentação dos clientes
+df_clientes_segmentado.groupBy("segmento").agg(count("cliente_id").alias("total_clientes")).show()
+
+# 2. Previsão de Comportamento de Compra: Usando regressão linear para prever vendas futuras
+# Preparando os dados para o modelo de regressão linear
+assembler = VectorAssembler(inputCols=["vendas_ano_anterior"], outputCol="features")
+df_vendas = assembler.transform(df_clientes_segmentado).select("features", "vendas_ano_atual")
+
+# Dividindo os dados em treinamento e teste
+train_data, test_data = df_vendas.randomSplit([0.8, 0.2])
+
+# Criando o modelo de regressão linear
+lr = LinearRegression(labelCol="vendas_ano_atual")
+lr_model = lr.fit(train_data)
+
+# Prevendo as vendas no conjunto de teste
+predictions = lr_model.transform(test_data)
+
+# Avaliando o modelo
+evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="vendas_ano_atual", metricName="rmse")
+rmse = evaluator.evaluate(predictions)
+print(f"Root Mean Squared Error (RMSE) do modelo: {rmse}")
+
+# Exibindo algumas previsões
+predictions.select("features", "vendas_ano_atual", "prediction").show(5)
+
+# 3. Análise Geográfica Detalhada: Contagem de clientes por região
+df_clientes_por_regiao = df_clientes.groupBy("regiao").agg(count("cliente_id").alias("total_clientes"))
+
+# Exibindo a contagem de clientes por região
+df_clientes_por_regiao.show()
+
+# Para uma análise geográfica mais detalhada, como visualizações baseadas em mapas, você precisaria integrar com bibliotecas de visualização como Folium ou GeoPandas, mas isso está fora do escopo do PySpark puro.
+
+# Parando a sessão Spark
+spark.stop()
